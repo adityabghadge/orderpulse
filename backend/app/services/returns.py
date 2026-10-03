@@ -23,7 +23,9 @@ from app.schemas.returns import RefundOut, ReturnCreate
 def create_return(db: Session, order_number: str, data: ReturnCreate) -> Return:
     # Lock the order so two simultaneous return requests for the same item can't both pass
     # the "enough quantity left" check below.
-    order = db.scalar(select(Order).where(Order.order_number == order_number).with_for_update())
+    order = db.scalar(
+        select(Order).where(Order.order_number == order_number).with_for_update(of=Order)
+    )
     if order is None:
         raise NotFoundError(f"Order {order_number} not found")
     if order.status != OrderStatus.DELIVERED.value or order.delivered_at is None:
@@ -72,6 +74,7 @@ def list_returns(
     status: ReturnStatus | None = None,
     order_number: str | None = None,
     reason: ReturnReason | None = None,
+    oldest_first: bool = False,
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[list[Return], int]:
@@ -87,7 +90,13 @@ def list_returns(
     rows = db.scalars(
         select(Return)
         .where(*filters)
-        .order_by(Return.requested_at.desc(), Return.id.desc())
+        .order_by(
+            *(
+                (Return.requested_at.asc(), Return.id.asc())
+                if oldest_first
+                else (Return.requested_at.desc(), Return.id.desc())
+            )
+        )
         .limit(limit)
         .offset(offset)
     ).unique()

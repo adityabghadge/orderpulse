@@ -69,6 +69,7 @@ class OrderSummary(BaseModel):
     id: int
     order_number: str
     customer_id: int
+    customer_name: str
     status: OrderStatus
     total_cents: int
     currency: str

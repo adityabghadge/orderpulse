@@ -4,6 +4,8 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 
 ![CI](https://github.com/adityabghadge/orderpulse/actions/workflows/ci.yml/badge.svg)
 
+![Operations overview](docs/screenshots/overview.png)
+
 ## Features
 
 - **Order lifecycle API**: orders move through `placed → packed → shipped → out_for_delivery → delivered` (or `cancelled`), enforced by an explicit state machine. Invalid moves are rejected with `409 Conflict`.
@@ -14,27 +16,28 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 - **Server-side money math**: totals are computed from line items in integer cents. Clients can't set them.
 - **Consistent errors**: every failure returns `{"error": {"code", "message"}}`.
 - **Response timing**: every response carries an `X-Response-Time-Ms` header for latency tracking.
+- **Operations dashboard**: a React console with a live order pipeline, key metrics, a first-in-first-out returns queue, and order detail pages where operators move orders forward, start returns, and issue refunds. Refunds retry network failures with the same idempotency key.
 - **Realistic demo data**: a seeded generator simulates thousands of orders with true-to-life fulfillment timelines.
 
 ## Tech stack
 
 | Layer | Tools |
 |---|---|
+| Dashboard | React 19, TypeScript, Vite, React Router, TanStack Query, Recharts |
 | API | Python 3.13, FastAPI, Pydantic |
 | Database | PostgreSQL 16, SQLAlchemy 2, Alembic migrations |
-| Testing & quality | pytest, Ruff |
+| Testing & quality | pytest, Vitest, Testing Library, Ruff |
 | Infrastructure | Docker Compose, GitHub Actions |
 
 ## Getting started
 
-Requirements: Docker Desktop, Python 3.11+, and `make`.
+Requirements: Docker Desktop, Python 3.11+, Node.js 20+, and `make`.
 
 ```bash
 make setup   # start Postgres, install dependencies, run migrations, load demo data
-make api     # http://localhost:8000
+make api     # API at http://localhost:8000 (interactive docs at /docs)
+make web     # dashboard at http://localhost:5173 (in a second terminal)
 ```
-
-Interactive API docs are at **http://localhost:8000/docs**.
 
 Run `make` to see all commands, including `make test` and `make lint`.
 
@@ -54,10 +57,23 @@ Run `make` to see all commands, including `make test` and `make lint`.
 | `POST` | `/api/v1/returns/{return_number}/refund` | Issue the refund (requires `Idempotency-Key`) |
 | `GET` | `/api/v1/customers` | Search customers by name or email |
 | `GET` | `/api/v1/customers/{id}` | Customer details |
+| `GET` | `/api/v1/stats/overview` | Pipeline, metrics, and trends for the dashboard |
+
+## Screenshots
+
+| Returns queue | Order detail |
+|---|---|
+| ![Returns queue](docs/screenshots/returns.png) | ![Order detail](docs/screenshots/order.png) |
 
 ## Project structure
 
 ```
+frontend/
+  src/
+    pages/      Overview, orders, order detail, returns queue
+    components/ Pipeline, status pills, chart, layout, shared states
+    api/        Typed API client and data-fetching hooks
+    lib/        Formatting and the refund retry logic
 backend/
   app/
     api/        HTTP routes (thin: validate input, call a service, return output)
@@ -77,10 +93,11 @@ infra/          Database initialization
 ## Testing
 
 ```bash
-make test
+make test      # backend
+make web-test  # frontend type-check and tests
 ```
 
-Tests run against a dedicated `orderpulse_test` database built from the real migrations, and cover order and return lifecycles, validation, error formats, idempotent retries, payment-provider failures, and concurrent updates.
+Backend tests run against a dedicated `orderpulse_test` database built from the real migrations, and cover order and return lifecycles, validation, error formats, idempotent retries, payment-provider failures, and concurrent updates.
 
 ## Design notes
 

@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Response, status
 from sqlalchemy.orm import Session
@@ -36,6 +36,7 @@ def list_returns(
     status_filter: Annotated[ReturnStatus | None, Query(alias="status")] = None,
     reason: ReturnReason | None = None,
     order_number: Annotated[str | None, Query(max_length=20)] = None,
+    sort: Literal["newest", "oldest"] = "newest",
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ReturnPage:
@@ -44,6 +45,7 @@ def list_returns(
         status=status_filter,
         reason=reason,
         order_number=order_number,
+        oldest_first=sort == "oldest",
         limit=limit,
         offset=offset,
     )

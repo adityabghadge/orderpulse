@@ -60,7 +60,7 @@ class Order(TimestampMixin, Base):
     )
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    customer: Mapped["Customer"] = relationship(back_populates="orders")
+    customer: Mapped["Customer"] = relationship(back_populates="orders", lazy="joined")
     items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan", lazy="selectin"
     )
@@ -69,6 +69,10 @@ class Order(TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="OrderStatusEvent.id",
     )
+
+    @property
+    def customer_name(self) -> str:
+        return self.customer.full_name
 
     @property
     def item_count(self) -> int:

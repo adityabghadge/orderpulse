@@ -74,9 +74,7 @@ def list_orders(
 
 def get_order(db: Session, order_number: str) -> Order:
     order = db.scalar(
-        select(Order)
-        .where(Order.order_number == order_number)
-        .options(selectinload(Order.customer), selectinload(Order.events))
+        select(Order).where(Order.order_number == order_number).options(selectinload(Order.events))
     )
     if order is None:
         raise NotFoundError(f"Order {order_number} not found")
@@ -94,7 +92,9 @@ def change_status(
     # SELECT ... FOR UPDATE locks this order's row until we commit. If two operators click
     # "ship" at the same moment, the second waits, then sees the new status and is rejected,
     # instead of both succeeding and writing two conflicting events.
-    order = db.scalar(select(Order).where(Order.order_number == order_number).with_for_update())
+    order = db.scalar(
+        select(Order).where(Order.order_number == order_number).with_for_update(of=Order)
+    )
     if order is None:
         raise NotFoundError(f"Order {order_number} not found")
 

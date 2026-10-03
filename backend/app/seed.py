@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.domain.order_status import OrderStatus
-from app.domain.returns import REASON_TO_TEAM, RETURN_WINDOW_DAYS, ReturnStatus
+from app.domain.returns import REASON_TO_TEAM, RETURN_WINDOW_DAYS, ReturnStatus, route_by_reason
 from app.models import Customer, Order, OrderItem, OrderStatusEvent, Refund, Return
 from app.return_reasons import sample_return_reason
 
@@ -160,7 +160,7 @@ def seed(customer_count: int, order_count: int, random_seed: int = 42) -> None:
             cid: row["city"] for cid, row in zip(customer_ids, customer_rows, strict=True)
         }
         # A minority of customers place most orders, as in real stores.
-        weights = [rng.paretovariate(1.5) for _ in customer_ids]
+        weights = [rng.lognormvariate(0, 0.8) for _ in customer_ids]
 
         order_rows, order_items, order_events = [], [], []
         for _ in range(order_count):
@@ -291,9 +291,14 @@ def _seed_returns(db: Session, rng: random.Random, now: datetime) -> int:
                 "reason_code": picked.value,
                 "reason_text": reason_text,
                 "status": status.value,
-                # Historical returns carry the team that actually resolved them
-                # (after human triage), not the team the dropdown pointed to.
-                "assigned_team": REASON_TO_TEAM[true_cause].value,
+                # Open returns are routed by the dropdown, exactly like the live API.
+                # Closed returns carry the team that actually resolved them after human
+                # triage: the labels a routing model learns from.
+                "assigned_team": (
+                    REASON_TO_TEAM[true_cause].value
+                    if resolved_at
+                    else route_by_reason(picked).value
+                ),
                 "refund_amount_cents": item.unit_price_cents * quantity,
                 "requested_at": requested_at,
                 "resolved_at": resolved_at,

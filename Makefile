@@ -1,12 +1,12 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup up down reset install migrate seed api test lint format
+.PHONY: help setup up down reset install migrate seed api test lint format web-install web web-test web-build
 
 VENV := backend/.venv/bin
 
 help: ## Show available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-setup: up install migrate seed ## First-time setup: database, dependencies, schema, demo data
+setup: up install web-install migrate seed ## First-time setup: database, dependencies, schema, demo data
 
 up: ## Start Postgres in Docker and wait until it is ready
 	docker compose up -d --wait
@@ -37,3 +37,15 @@ lint: ## Check code style
 
 format: ## Auto-format the code
 	cd backend && .venv/bin/ruff check --fix . && .venv/bin/ruff format .
+
+web-install: ## Install frontend dependencies
+	cd frontend && npm install --no-fund --no-audit
+
+web: ## Run the dashboard at http://localhost:5173 (needs `make api` running)
+	cd frontend && npm run dev
+
+web-test: ## Type-check and test the frontend
+	cd frontend && npm run typecheck && npm test
+
+web-build: ## Build the dashboard for production
+	cd frontend && npm run build
