@@ -1,0 +1,45 @@
+# One-off job: load demo data and train the models.
+# Run with `make k8s-demo` (it also restarts the API so it picks up the new models).
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: demo-data
+  namespace: orderpulse
+spec:
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      initContainers:
+        # Local volume folders can be created owned by root; hand this one to the app user.
+        - name: prepare-models-folder
+          image: orderpulse-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "chown -R 10001:10001 /app/artifacts"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: models
+              mountPath: /app/artifacts
+      containers:
+        - name: demo-data
+          image: orderpulse-api:0.1.0
+          imagePullPolicy: IfNotPresent
+          command: ["sh", "-c", "python -m app.seed && python -m app.ml.train"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+          envFrom:
+            - configMapRef: { name: orderpulse-config }
+            - secretRef: { name: orderpulse-secrets }
+          resources:
+            requests: { cpu: 500m, memory: 1Gi }
+            limits: { memory: 3Gi }
+          volumeMounts:
+            - name: models
+              mountPath: /app/artifacts
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: models

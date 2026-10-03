@@ -6,21 +6,41 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 
 ![Operations overview](docs/screenshots/overview.png)
 
-## Features
+## What it does
 
-- **Order lifecycle API**: orders move through `placed → packed → shipped → out_for_delivery → delivered` (or `cancelled`), enforced by an explicit state machine. Invalid moves are rejected with `409 Conflict`.
-- **Returns with eligibility rules**: returns are accepted only for delivered orders, inside a 30-day window, and never for more units than were bought. Each return is routed to the team that handles it (logistics, quality, fulfillment, or customer care).
-- **Exactly-once refunds**: refunds require an `Idempotency-Key` header. Retries replay the original response instead of paying again, concurrent duplicates are serialized, and a database constraint guarantees one refund per return. Payment-provider failures roll back cleanly so the same key can be retried.
-- **Full audit trail**: every status change is recorded with who made it, when, and why.
-- **Safe under concurrency**: status changes lock the order row (`SELECT … FOR UPDATE`), so simultaneous updates apply exactly once.
-- **Server-side money math**: totals are computed from line items in integer cents. Clients can't set them.
-- **Consistent errors**: every failure returns `{"error": {"code", "message"}}`.
-- **ML return routing**: a PyTorch text classifier reads what the customer wrote and routes each return to the right team, falling back to the customer's selected reason when it isn't confident. Agents can reassign a return, and their corrections become future training data.
-- **ML prioritization**: an XGBoost model scores each new return's chance of escalating (a complaint or chargeback), so the review queue can work the riskiest returns first.
-- **Fast at scale**: the dashboard overview reads precomputed daily totals from a PostgreSQL materialized view (refreshed concurrently in the background) and computes only today live, behind a Redis cache that writes invalidate immediately. If Redis goes down, the API keeps serving from the database.
-- **Response timing**: every response carries an `X-Response-Time-Ms` header, and the overview reports `X-Cache: HIT` or `MISS`.
-- **Operations dashboard**: a React console with a live order pipeline, key metrics, a first-in-first-out returns queue, and order detail pages where operators move orders forward, start returns, and issue refunds. Refunds retry network failures with the same idempotency key.
-- **Realistic demo data**: a seeded generator simulates thousands of orders with true-to-life fulfillment timelines.
+**For operators**
+- A live pipeline of orders in flight, key metrics, and 30-day trends on one screen.
+- Orders move through `placed → packed → shipped → out_for_delivery → delivered` (or `cancelled`), enforced by a state machine with a full audit trail.
+- Returns are accepted only for delivered orders, inside a 30-day window, and never for more units than were bought. Operators approve, receive, and refund them from a work queue.
+
+**Reliability**
+- **Exactly-once refunds**: every refund carries an `Idempotency-Key`. Retries replay the original response, concurrent duplicates are serialized, and a database constraint guarantees one refund per return. The dashboard retries network failures with the same key.
+- **Safe under concurrency**: state changes lock the affected row (`SELECT … FOR UPDATE`); migrations take an advisory lock so several API instances can start at once.
+- Money is integer cents, totals are computed on the server, and every error has the same JSON shape.
+
+**Performance**
+- The overview reads precomputed daily totals from a PostgreSQL materialized view, computes only today live, and is cached in Redis. Writes invalidate the cache immediately. Measured: 108 ms → 4 ms on 400,000 orders.
+- If Redis fails, a circuit breaker steps around it and the API keeps serving from the database.
+
+**Machine learning**
+- **Routing**: a PyTorch text classifier reads what the customer wrote and sends each return to the right team: 17.1% → 5.3% misrouted versus trusting the customer's selected reason.
+- **Prioritization**: an XGBoost model estimates each return's chance of escalating, so the queue works the riskiest first. Agents' routing corrections become future training labels.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    browser([Operator's browser]) --> web[Dashboard<br/>React · nginx]
+    web -- /api --> api[API<br/>FastAPI · 2 replicas]
+    api --> pg[(PostgreSQL<br/>orders, returns, refunds,<br/>daily_operations view)]
+    api --> redis[(Redis<br/>overview cache)]
+    api --> models[[Trained models<br/>PyTorch · XGBoost]]
+    api --> pay[Payment provider<br/>simulated]
+    job[[Training job]] --> pg
+    job --> models
+```
+
+The API is layered: routes validate HTTP input, services hold the business logic, the domain package holds the rules (order and return lifecycles), and models and schemas define the database tables and the API contract.
 
 ## Tech stack
 
@@ -31,33 +51,45 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 | Data | PostgreSQL 16 (materialized views), Redis 7, SQLAlchemy 2, Alembic migrations |
 | Machine learning | PyTorch, XGBoost, NumPy |
 | Testing & quality | pytest, Vitest, Testing Library, Ruff |
-| Infrastructure | Docker Compose, GitHub Actions |
+| Delivery | Docker, Docker Compose, Kubernetes (Kustomize), GitHub Actions |
 
-## Getting started
+## Running it
 
-Requirements: Docker Desktop, Python 3.11+, Node.js 20+, and `make`.
+There are three ways to run OrderPulse, from quickest to most production-like. All need [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 
-```bash
-make setup   # start services, install dependencies, migrate, load demo data, train models
-make api     # API at http://localhost:8000 (interactive docs at /docs)
-make web     # dashboard at http://localhost:5173 (in a second terminal)
-```
-
-Run `make` to see all commands, including `make test` and `make lint`.
-
-To try it at scale, load 400,000 orders, retrain, and measure the overview:
+**1. Everything in Docker** (no local Python or Node needed)
 
 ```bash
-make seed-large   # about a minute
-make train        # about 20 seconds
-make bench
+make stack        # build and start Postgres, Redis, the API, and the dashboard
+make stack-demo   # load demo data and train the models
 ```
+Open **http://localhost:8080**. Stop with `make stack-down`.
+
+**2. Local development** (Python 3.11+, Node.js 20+)
+
+```bash
+make setup   # start Postgres and Redis, install dependencies, migrate, load data, train models
+make api     # API with auto-reload at http://localhost:8000 (interactive docs at /docs)
+make web     # dashboard with hot reload at http://localhost:5173 (second terminal)
+```
+
+**3. Kubernetes** (enable Kubernetes in Docker Desktop's settings)
+
+```bash
+make k8s-build   # build the images
+make k8s-up      # deploy Postgres, Redis, 2 API replicas, and the dashboard
+make k8s-demo    # run the demo-data job, then roll the API to load the new models
+```
+Open **http://localhost:8090**. Remove everything with `make k8s-down`.
+
+Run `make` to list every command. To try it at scale: `make seed-large && make train && make bench`.
 
 ## API
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/health` | Service and database health |
+| `GET` | `/health` | Readiness: database and cache status |
+| `GET` | `/health/live` | Liveness: the process is up |
 | `GET` | `/api/v1/orders` | List orders. Filters: `status`, `customer_id`, `q`; paging: `limit`, `offset` |
 | `POST` | `/api/v1/orders` | Place an order |
 | `GET` | `/api/v1/orders/{order_number}` | Order details with line items and status history |
@@ -102,7 +134,9 @@ backend/
     seed.py     Demo data generator
   alembic/      Database migrations
   tests/        API, concurrency, caching, and state-machine tests
-infra/          Database initialization
+infra/
+  k8s/          Kubernetes manifests (Kustomize) and the demo-data job
+  postgres/     Database initialization for Docker Compose
 ```
 
 ## Testing
@@ -138,6 +172,17 @@ Results on the 400,000-order dataset (39,744 training and 9,936 test returns):
 Precision@20 looks at only 20 returns, so it moves by 0.05 whenever one return changes places (it ranged from 0.80 to 0.90 across machines). AUC, which uses every test return, is the steadier measure.
 
 The demo data is synthetic, but built to be honest: some customer messages are vague or ambiguous, and a small share of historical labels are wrong, so neither model can score perfectly. If no trained model is present, or one fails to load, the API falls back to rule-based routing.
+
+## Deployment
+
+The Kubernetes setup in `infra/k8s` runs the API as two replicas with a rolling-update strategy that never drops below full capacity:
+
+- **Health checks are split on purpose.** Readiness (`/health`) checks the database, so a pod that can't reach it stops receiving traffic. Liveness (`/health/live`) checks only that the process answers, so a database outage doesn't trigger a pointless restart loop.
+- **Migrations run in an init container** before each API pod starts, serialized by a Postgres advisory lock.
+- **Configuration lives outside the image** in a ConfigMap and a Secret, and containers run as a non-root user.
+- **Training runs as a one-off Job** that writes the models to a shared volume; restarting the API rolls out the new models with no downtime.
+
+CI builds both images and validates the manifests against the Kubernetes schemas on every push. Local manifests use demo credentials and in-cluster Postgres; a production setup would use a managed database and a secret manager.
 
 ## Design notes
 

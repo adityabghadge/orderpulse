@@ -1,5 +1,19 @@
 name: orderpulse
 
+# `docker compose up` starts only Postgres and Redis (for local development).
+# `docker compose --profile app up --build` also runs the API and dashboard in containers.
+
+x-backend: &backend
+  image: orderpulse-api:local
+  build: ./backend
+  environment:
+    ORDERPULSE_ENVIRONMENT: docker
+    ORDERPULSE_DATABASE_URL: postgresql+psycopg://orderpulse:orderpulse@postgres:5432/orderpulse
+    ORDERPULSE_REDIS_URL: redis://redis:6379/0
+    ORDERPULSE_CORS_ORIGINS: '["http://localhost:8080"]'
+  volumes:
+    - models:/app/artifacts
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -28,5 +42,36 @@ services:
       timeout: 3s
       retries: 20
 
+  migrate:
+    <<: *backend
+    profiles: [app]
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    <<: *backend
+    profiles: [app]
+    ports:
+      - "8001:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    image: orderpulse-web:local
+    build: ./frontend
+    profiles: [app]
+    ports:
+      - "8080:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
 volumes:
   pgdata:
+  models:

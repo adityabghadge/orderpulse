@@ -18,10 +18,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Demo data generation (also installed in the container image for the demo-data job).
+demo = ["faker>=25"]
 dev = [
+    "orderpulse-api[demo]",
     "pytest>=8",
     "httpx>=0.27",
-    "faker>=25",
     "ruff>=0.6",
 ]
 

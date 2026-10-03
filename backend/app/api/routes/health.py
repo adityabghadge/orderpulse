@@ -9,6 +9,16 @@ from app.db.session import engine
 router = APIRouter(tags=["health"])
 
 
+@router.get("/health/live")
+def live() -> dict:
+    """Liveness: the process is up and answering. Deliberately checks nothing else.
+
+    If this checked the database, a database outage would make Kubernetes restart every API
+    pod in a loop, which can't fix the database and only adds load when it comes back.
+    """
+    return {"status": "alive"}
+
+
 @router.get("/health")
 def health() -> JSONResponse:
     """Readiness check used by Docker and Kubernetes.

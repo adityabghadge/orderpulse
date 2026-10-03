@@ -91,3 +91,29 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build API image
+        run: docker build -t orderpulse-api:ci backend
+
+      - name: Build dashboard image
+        run: docker build -t orderpulse-web:ci frontend
+
+  manifests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kustomize and kubeconform
+        run: |
+          curl -sSL https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.7.1/kustomize_v5.7.1_linux_amd64.tar.gz | tar xz
+          curl -sSL https://github.com/yannh/kubeconform/releases/download/v0.7.0/kubeconform-linux-amd64.tar.gz | tar xz
+
+      - name: Validate Kubernetes manifests
+        run: |
+          ./kustomize build infra/k8s > rendered.yaml
+          ./kubeconform -strict -summary -kubernetes-version 1.32.0 rendered.yaml infra/k8s/jobs/demo-data.yaml

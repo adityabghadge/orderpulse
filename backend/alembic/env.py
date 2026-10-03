@@ -1,7 +1,7 @@
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import create_engine, pool
+from sqlalchemy import create_engine, pool, text
 
 from app import models  # noqa: F401  (registers all tables on Base.metadata)
 from app.core.config import get_settings
@@ -30,6 +30,9 @@ def run_migrations_online() -> None:
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
         with context.begin_transaction():
+            # Several API instances can start at once and each try to migrate. This lock makes
+            # them take turns: the first applies the migrations, the rest find nothing to do.
+            connection.execute(text("SELECT pg_advisory_xact_lock(hashtext('alembic'))"))
             context.run_migrations()
 
 

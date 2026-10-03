@@ -162,3 +162,7 @@ def test_customer_search_and_lookup(client, customer):
     assert [c["id"] for c in found] == [customer.id]
     assert client.get(f"/api/v1/customers/{customer.id}").json()["tier"] == "plus"
     assert client.get("/api/v1/customers/999").status_code == 404
+
+
+def test_liveness_does_not_depend_on_the_database(client):
+    assert client.get("/health/live").json() == {"status": "alive"}

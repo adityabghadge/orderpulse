@@ -1,0 +1,21 @@
+# Non-secret settings, injected into the API as environment variables.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: orderpulse-config
+data:
+  ORDERPULSE_ENVIRONMENT: kubernetes
+  ORDERPULSE_REDIS_URL: redis://redis:6379/0
+  ORDERPULSE_CORS_ORIGINS: '["http://localhost:8090"]'
+  ORDERPULSE_STATS_REFRESH_SECONDS: "300"
+---
+# Local demo credentials. In a real cluster these come from a secret manager
+# (e.g. AWS Secrets Manager via External Secrets) and are never committed.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: orderpulse-secrets
+type: Opaque
+stringData:
+  POSTGRES_PASSWORD: orderpulse-local
+  ORDERPULSE_DATABASE_URL: postgresql+psycopg://orderpulse:orderpulse-local@postgres:5432/orderpulse
