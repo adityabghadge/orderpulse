@@ -1,4 +1,5 @@
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -22,6 +23,11 @@ class Settings(BaseSettings):
     # How often the API refreshes the precomputed daily totals in the background.
     stats_refresh_seconds: int = 300
     background_jobs: bool = True
+
+    # Where trained models are saved and loaded from.
+    model_dir: Path = Path(__file__).resolve().parents[2] / "artifacts"
+    # Below this confidence the routing model defers to the customer's dropdown choice.
+    routing_min_confidence: float = 0.6
 
 
 @lru_cache

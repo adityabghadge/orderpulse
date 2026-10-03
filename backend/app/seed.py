@@ -1,7 +1,7 @@
 """Generate realistic demo data: customers, orders, status histories, returns and refunds.
 
 Usage:
-    python -m app.seed                      # 500 customers, 5,000 orders
+    python -m app.seed                      # 2,000 customers, 20,000 orders
     python -m app.seed --orders 50000       # larger dataset for performance work
 
 Every order walks through the real lifecycle with realistic delays between steps, so recent
@@ -10,6 +10,7 @@ The random generator is seeded, so the same command always produces the same dat
 """
 
 import argparse
+import math
 import random
 import time
 import uuid
@@ -22,7 +23,14 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.domain.order_status import OrderStatus
-from app.domain.returns import REASON_TO_TEAM, RETURN_WINDOW_DAYS, ReturnStatus, route_by_reason
+from app.domain.returns import (
+    REASON_TO_TEAM,
+    RETURN_WINDOW_DAYS,
+    ReturnReason,
+    ReturnStatus,
+    Team,
+    route_by_reason,
+)
 from app.return_reasons import sample_return_reason
 from app.services.stats import invalidate_overview, refresh_daily_operations
 
@@ -80,6 +88,46 @@ HAPPY_PATH = [OrderStatus.PACKED, OrderStatus.SHIPPED, OrderStatus.OUT_FOR_DELIV
 CANCEL_RATE = 0.04
 RETURN_RATE = 0.15
 REJECT_RATE = 0.08
+# Human triage isn't perfect: a small share of historical returns were handled by the wrong team.
+TRIAGE_ERROR_RATE = 0.03
+
+# How strongly each true cause pushes a customer toward escalating (complaint or chargeback).
+ESCALATION_BY_CAUSE: dict[ReturnReason, float] = {
+    ReturnReason.WRONG_ITEM: 0.8,
+    ReturnReason.DAMAGED: 0.7,
+    ReturnReason.MISSING_PARTS: 0.6,
+    ReturnReason.LATE_DELIVERY: 0.6,
+    ReturnReason.DEFECTIVE: 0.5,
+    ReturnReason.NOT_AS_DESCRIBED: 0.3,
+    ReturnReason.SIZE_FIT: -0.6,
+    ReturnReason.CHANGED_MIND: -0.8,
+}
+
+
+def _escalation_probability(
+    rng: random.Random,
+    *,
+    amount_cents: int,
+    plus_member: bool,
+    cause: ReturnReason,
+    upset: bool,
+    difficulty: float,
+) -> float:
+    """Ground truth for the simulation: how likely this customer is to escalate.
+
+    The priority model never sees this function. It has to learn the pattern from
+    observable features: amount, membership, dropdown reason, wording, return history.
+    """
+    logit = (
+        -3.5
+        + 0.8 * math.log(max(amount_cents, 100) / 6000)
+        + 0.7 * plus_member
+        + ESCALATION_BY_CAUSE[cause]
+        + 1.0 * upset
+        + 0.6 * difficulty
+        + rng.gauss(0, 0.4)
+    )
+    return 1 / (1 + math.exp(-logit))
 
 
 def _reset(db: Session) -> None:
@@ -158,17 +206,23 @@ def seed(customer_count: int, order_count: int, random_seed: int = 42) -> dict[s
 
     customers, orders, items, events, returns, refunds = [], [], [], [], [], []
     customer_city: dict[int, str] = {}
+    plus_member: dict[int, bool] = {}
+    # A hidden trait: some customers return more often and escalate more readily. Models can
+    # only see its effects, e.g. through how many returns a customer has made.
+    difficulty: dict[int, float] = {}
     for customer_id in range(1, customer_count + 1):
         first, last = fake.first_name(), fake.last_name()
         city = rng.choice(CITIES)
         customer_city[customer_id] = city
+        plus_member[customer_id] = rng.random() < 0.18
+        difficulty[customer_id] = rng.gauss(0, 1)
         customers.append(
             (
                 customer_id,
                 f"{first} {last}",
                 f"{first}.{last}.{customer_id}@example.com".lower(),
                 city,
-                "plus" if rng.random() < 0.18 else "standard",
+                "plus" if plus_member[customer_id] else "standard",
                 now,
                 now,
             )
@@ -225,18 +279,38 @@ def seed(customer_count: int, order_count: int, random_seed: int = 42) -> dict[s
             )
         )
 
-        if delivered_at is None or rng.random() >= RETURN_RATE:
+        return_rate = min(0.6, RETURN_RATE * math.exp(0.6 * difficulty[customer_id]))
+        if delivered_at is None or rng.random() >= return_rate:
             continue
         requested_at = delivered_at + timedelta(days=rng.uniform(0.2, RETURN_WINDOW_DAYS * 0.6))
         if requested_at > now:
             continue
         product_name, category, item_quantity, unit_price, line_id = _pick_item(rng, order_items)
-        true_cause, picked, reason_text = sample_return_reason(rng, product_name, category)
+        reason = sample_return_reason(rng, product_name, category)
         status = _return_status(rng, (now - requested_at).total_seconds() / 86400)
         quantity = rng.randint(1, item_quantity)
         resolved_at = None
         if status in (ReturnStatus.REJECTED, ReturnStatus.REFUNDED):
             resolved_at = min(now, requested_at + timedelta(days=rng.uniform(1, 9)))
+
+        if resolved_at:
+            # Closed: the team that actually handled it after human triage (the routing label),
+            # and whether the customer escalated (the priority label).
+            team = REASON_TO_TEAM[reason.true_cause]
+            if rng.random() < TRIAGE_ERROR_RATE:
+                team = rng.choice([t for t in Team if t is not team])
+            routing_source = "agent"
+            escalated = rng.random() < _escalation_probability(
+                rng,
+                amount_cents=unit_price * quantity,
+                plus_member=plus_member[customer_id],
+                cause=reason.true_cause,
+                upset=reason.upset,
+                difficulty=difficulty[customer_id],
+            )
+        else:
+            # Open: routed by the dropdown, exactly like the live API without a model.
+            team, routing_source, escalated = route_by_reason(reason.picked), "rule", None
         return_id += 1
         returns.append(
             (
@@ -244,13 +318,12 @@ def seed(customer_count: int, order_count: int, random_seed: int = 42) -> dict[s
                 order_id,
                 line_id,
                 quantity,
-                picked.value,
-                reason_text,
+                reason.picked.value,
+                reason.text,
                 status.value,
-                # Open returns are routed by the dropdown, exactly like the live API.
-                # Closed returns carry the team that actually resolved them after human
-                # triage: the labels a routing model learns from.
-                REASON_TO_TEAM[true_cause].value if resolved_at else route_by_reason(picked).value,
+                team.value,
+                routing_source,
+                escalated,
                 None,
                 requested_at,
                 resolved_at,
@@ -307,7 +380,8 @@ def seed(customer_count: int, order_count: int, random_seed: int = 42) -> dict[s
             "returns",
             [
                 "id", "order_id", "order_item_id", "quantity", "reason_code", "reason_text",
-                "status", "assigned_team", "decision_note", "requested_at", "resolved_at",
+                "status", "assigned_team", "routing_source", "escalated", "decision_note",
+                "requested_at", "resolved_at",
                 "refund_amount_cents", "created_at", "updated_at",
             ],
             returns,
@@ -327,6 +401,12 @@ def seed(customer_count: int, order_count: int, random_seed: int = 42) -> dict[s
         db.commit()
         db.execute(text("ANALYZE"))  # refresh the query planner's statistics after a bulk load
         refresh_daily_operations(db, concurrently=False)
+        # If models were trained before, route and score the new open returns with them.
+        from app.ml.registry import get_models
+        from app.ml.train import apply_to_open_returns
+
+        if get_models().router or get_models().priority:
+            apply_to_open_returns(db)
     invalidate_overview()
 
     elapsed = time.perf_counter() - started
@@ -345,8 +425,8 @@ def _pick_item(rng: random.Random, order_items: list[tuple]) -> tuple:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Load demo data into the OrderPulse database.")
-    parser.add_argument("--customers", type=int, default=500)
-    parser.add_argument("--orders", type=int, default=5000)
+    parser.add_argument("--customers", type=int, default=2000)
+    parser.add_argument("--orders", type=int, default=20000)
     parser.add_argument("--seed", type=int, default=42, help="Random seed for repeatable data")
     args = parser.parse_args()
 

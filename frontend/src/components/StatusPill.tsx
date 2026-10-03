@@ -28,3 +28,12 @@ export function ReturnStatusPill({ status }: { status: ReturnStatus }) {
 }
 
 export const STAGE_CLASS = ORDER_STEP;
+
+const PRIORITY_CLASS = { high: "priority-high", medium: "priority-medium", low: "priority-low" };
+const PRIORITY_LABEL = { high: "High", medium: "Medium", low: "Low" };
+
+/** Escalation risk from the priority model. The label carries the meaning, not just color. */
+export function PriorityPill({ priority }: { priority: "high" | "medium" | "low" | null }) {
+  if (!priority) return <span className="muted">–</span>;
+  return <span className={`pill ${PRIORITY_CLASS[priority]}`}>{PRIORITY_LABEL[priority]}</span>;
+}

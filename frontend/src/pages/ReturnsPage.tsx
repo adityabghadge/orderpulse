@@ -2,10 +2,16 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../api/client";
-import { useChangeReturnStatus, useIssueRefund, useReturn, useReturns } from "../api/hooks";
-import type { ReturnReason, ReturnRecord, ReturnStatus } from "../api/types";
+import {
+  useChangeReturnStatus,
+  useIssueRefund,
+  useReassignTeam,
+  useReturn,
+  useReturns,
+} from "../api/hooks";
+import type { ReturnReason, ReturnRecord, ReturnStatus, Team } from "../api/types";
 import { EmptyState, ErrorState, Pager, TableSkeleton } from "../components/States";
-import { ReturnStatusPill } from "../components/StatusPill";
+import { PriorityPill, ReturnStatusPill } from "../components/StatusPill";
 import { useToast } from "../components/Toasts";
 import {
   formatAge,
@@ -134,13 +140,60 @@ function ReturnActions({ record }: { record: ReturnRecord }) {
   return null;
 }
 
+function routingExplanation(record: ReturnRecord): string {
+  if (record.routing_source === "model" && record.routing_confidence !== null) {
+    const percent = Math.min(99, Math.round(record.routing_confidence * 100));
+    return `Routed by the model from the customer's words (${percent}% confident)`;
+  }
+  if (record.routing_source === "agent") return "Assigned by an agent";
+  return "Routed by the reason the customer selected";
+}
+
+function TeamControl({ record }: { record: ReturnRecord }) {
+  const notify = useToast();
+  const reassign = useReassignTeam(record.return_number);
+  const [team, setTeam] = useState<Team>(record.assigned_team ?? "customer_care");
+  const isOpen = ["requested", "approved", "received"].includes(record.status);
+  if (!isOpen) return null;
+  return (
+    <div className="field">
+      <label htmlFor="team-select">Send to another team</label>
+      <div className="inline-form">
+        <select
+          id="team-select"
+          className="select"
+          value={team}
+          onChange={(e) => setTeam(e.target.value as Team)}
+        >
+          {Object.entries(TEAM_LABEL).map(([value, label]) => (
+            <option key={value} value={value}>
+              {label}
+            </option>
+          ))}
+        </select>
+        <button
+          className="btn btn-secondary"
+          disabled={reassign.isPending || team === record.assigned_team}
+          onClick={() =>
+            reassign.mutate(team, {
+              onSuccess: () => notify(`${record.return_number} sent to ${TEAM_LABEL[team]}`),
+              onError: (error) => notify(errorMessage(error), "error"),
+            })
+          }
+        >
+          Reassign
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ReturnPanel({ returnNumber }: { returnNumber: string }) {
   const { data: record, isLoading, isError, error, refetch } = useReturn(returnNumber);
 
   if (isError) return <ErrorState error={error} onRetry={refetch} />;
   if (isLoading || !record) return <div className="panel-body"><div className="skeleton" /></div>;
 
-  const teamFromDropdown = record.assigned_team;
   return (
     <>
       <div className="panel-head">
@@ -159,7 +212,23 @@ function ReturnPanel({ returnNumber }: { returnNumber: string }) {
           <dt>Reason selected</dt>
           <dd>{REASON_LABEL[record.reason_code]}</dd>
           <dt>Handled by</dt>
-          <dd>{teamFromDropdown ? TEAM_LABEL[teamFromDropdown] : "Unassigned"}</dd>
+          <dd>
+            {record.assigned_team ? TEAM_LABEL[record.assigned_team] : "Unassigned"}
+            <div className="muted" style={{ fontWeight: 400, fontSize: "0.82rem" }}>
+              {routingExplanation(record)}
+            </div>
+          </dd>
+          {record.priority_score !== null && (
+            <>
+              <dt>Escalation risk</dt>
+              <dd>
+                <PriorityPill priority={record.priority} />{" "}
+                <span className="muted" style={{ fontWeight: 400 }}>
+                  {Math.round(record.priority_score * 100)}% chance
+                </span>
+              </dd>
+            </>
+          )}
           <dt>Units</dt>
           <dd>{record.quantity}</dd>
           <dt>Refund amount</dt>
@@ -180,6 +249,7 @@ function ReturnPanel({ returnNumber }: { returnNumber: string }) {
           </div>
         )}
         <ReturnActions record={record} />
+        <TeamControl record={record} />
       </div>
     </>
   );
@@ -191,6 +261,9 @@ export function ReturnsPage() {
   const reason = (params.get("reason") as ReturnReason | null) ?? undefined;
   const offset = Number(params.get("offset") ?? 0);
   const selected = params.get("selected") ?? undefined;
+  const isOpenQueue = OPEN.includes(queue);
+  // Open work defaults to riskiest first; operators can switch to first-in, first-out.
+  const sort = (params.get("sort") as "priority" | "oldest" | null) ?? "priority";
 
   function update(changes: Record<string, string | number | undefined>) {
     const next = new URLSearchParams(params);
@@ -204,8 +277,7 @@ export function ReturnsPage() {
   const { data, isLoading, isError, error, refetch } = useReturns({
     status: queue === "all" ? undefined : queue,
     reason,
-    // Open work is handled first-in, first-out; closed returns show the most recent first.
-    sort: OPEN.includes(queue) ? "oldest" : "newest",
+    sort: isOpenQueue ? sort : "newest",
     limit: PAGE_SIZE,
     offset,
   });
@@ -216,9 +288,11 @@ export function ReturnsPage() {
         <div>
           <h1>Returns</h1>
           <p className="sub">
-            {OPEN.includes(queue)
-              ? "Oldest first, so nothing waits too long"
-              : "Most recent first"}
+            {!isOpenQueue
+              ? "Most recent first"
+              : sort === "priority"
+                ? "Riskiest first, by predicted chance the customer escalates"
+                : "Oldest first, so nothing waits too long"}
           </p>
         </div>
       </div>
@@ -236,6 +310,22 @@ export function ReturnsPage() {
             </button>
           ))}
         </div>
+        {isOpenQueue && (
+          <>
+            <label className="visually-hidden" htmlFor="sort-select">
+              Sort
+            </label>
+            <select
+              id="sort-select"
+              className="select"
+              value={sort}
+              onChange={(e) => update({ sort: e.target.value, offset: undefined })}
+            >
+              <option value="priority">Highest risk first</option>
+              <option value="oldest">Oldest first</option>
+            </select>
+          </>
+        )}
         <label className="visually-hidden" htmlFor="reason-filter">
           Filter by reason
         </label>
@@ -271,13 +361,14 @@ export function ReturnsPage() {
                       <th>Return</th>
                       <th>Reason</th>
                       <th>Team</th>
+                      <th>Risk</th>
                       <th className="num">Amount</th>
                       <th>Requested</th>
                       {queue === "all" && <th>Status</th>}
                     </tr>
                   </thead>
                   {isLoading || !data ? (
-                    <TableSkeleton columns={queue === "all" ? 6 : 5} />
+                    <TableSkeleton columns={queue === "all" ? 7 : 6} />
                   ) : (
                     <tbody>
                       {data.items.map((r) => (
@@ -300,6 +391,9 @@ export function ReturnsPage() {
                           </td>
                           <td>{REASON_LABEL[r.reason_code]}</td>
                           <td>{r.assigned_team ? TEAM_LABEL[r.assigned_team] : "–"}</td>
+                          <td>
+                            <PriorityPill priority={r.priority} />
+                          </td>
                           <td className="num">{formatMoney(r.refund_amount_cents)}</td>
                           <td className="muted">{formatAge(r.requested_at)}</td>
                           {queue === "all" && (

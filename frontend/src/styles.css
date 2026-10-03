@@ -459,6 +459,17 @@ textarea {
 .step-5 { background: var(--step-5-bg); color: var(--step-5-fg); }
 .muted-fill { background: var(--muted-bg);  color: var(--muted-fg); }
 
+/* Escalation risk: reserved status hues, always paired with a text label. */
+.priority-high { background: #fbe4e4; color: #9b1c1c; }
+.priority-high::before { content: "▲"; font-size: 0.65rem; }
+.priority-medium { background: #fdf1d6; color: #7a4d00; }
+.priority-low { background: var(--muted-bg); color: var(--muted-fg); }
+
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .priority-high { background: #4a1f22; color: #f6b3b3; }
+  :root:where(:not([data-theme="light"])) .priority-medium { background: #43341a; color: #f4d18a; }
+}
+
 .tag {
   display: inline-block;
   padding: 1px 8px;
@@ -913,6 +924,25 @@ textarea {
 
 .bar-row > span:first-child {
   min-width: 108px;
+}
+
+.model-note {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  color: var(--ink-2);
+  font-size: 0.88rem;
+}
+
+.model-note strong {
+  color: var(--ink);
+}
+
+.inline-form {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .bar-row .num {

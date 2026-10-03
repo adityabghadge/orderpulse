@@ -91,6 +91,10 @@ export interface ReturnRecord {
   reason_text: string;
   status: ReturnStatus;
   assigned_team: Team | null;
+  routing_source: "rule" | "model" | "agent" | null;
+  routing_confidence: number | null;
+  priority_score: number | null;
+  priority: "high" | "medium" | "low" | null;
   decision_note: string | null;
   refund_amount_cents: number;
   requested_at: string;
@@ -118,4 +122,29 @@ export interface ReturnCreate {
   quantity: number;
   reason_code: ReturnReason;
   reason_text: string;
+}
+
+export interface ModelSummary {
+  routing: {
+    trained_at: string;
+    train_size: number;
+    metrics: {
+      test_size: number;
+      dropdown_misroute_rate: number;
+      model_misroute_rate: number;
+      deployed_misroute_rate: number;
+      model_used_share: number;
+    };
+  } | null;
+  priority: {
+    trained_at: string;
+    train_size: number;
+    metrics: {
+      test_size: number;
+      escalation_rate: number;
+      precision_at_20: number;
+      precision_at_20_by_refund_amount: number;
+      auc: number;
+    };
+  } | null;
 }

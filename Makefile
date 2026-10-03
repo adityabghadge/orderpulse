@@ -1,12 +1,12 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup up down reset install migrate seed seed-large bench api test lint format web-install web web-test web-build
+.PHONY: help setup up down reset install migrate seed seed-large bench train api test lint format web-install web web-test web-build
 
 VENV := backend/.venv/bin
 
 help: ## Show available commands
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "}; {printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
 
-setup: up install web-install migrate seed ## First-time setup: database, dependencies, schema, demo data
+setup: up install web-install migrate seed train ## First-time setup: services, dependencies, schema, demo data, models
 
 up: ## Start Postgres and Redis in Docker and wait until they are ready
 	docker compose up -d --wait
@@ -28,6 +28,9 @@ seed: ## Load demo data (wipes existing data)
 
 seed-large: ## Load 400,000 orders for performance testing (wipes existing data, ~1 min)
 	cd backend && .venv/bin/python -m app.seed --customers 25000 --orders 400000
+
+train: ## Train the return routing and priority models, then apply them to open returns
+	cd backend && .venv/bin/python -m app.ml.train
 
 bench: ## Measure overview latency: live queries vs materialized view vs Redis cache
 	cd backend && ORDERPULSE_BACKGROUND_JOBS=false .venv/bin/python -m app.bench

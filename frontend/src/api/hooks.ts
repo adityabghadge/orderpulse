@@ -2,7 +2,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tansta
 
 import { refundWithRetry } from "../lib/refund";
 import { api } from "./client";
-import type { OrderStatus, ReturnCreate, ReturnReason, ReturnStatus } from "./types";
+import type { OrderStatus, ReturnCreate, ReturnReason, ReturnStatus, Team } from "./types";
 
 // Query keys identify cached data. Invalidating a key makes every screen using it refetch.
 export const keys = {
@@ -15,6 +15,10 @@ export const keys = {
 
 export function useOverview() {
   return useQuery({ queryKey: keys.overview, queryFn: api.overview, refetchInterval: 30_000 });
+}
+
+export function useModels() {
+  return useQuery({ queryKey: ["models"], queryFn: api.models, staleTime: 5 * 60_000 });
 }
 
 export function useOrders(params: Parameters<typeof api.listOrders>[0]) {
@@ -33,7 +37,7 @@ export function useReturns(params: {
   status?: ReturnStatus;
   reason?: ReturnReason;
   order_number?: string;
-  sort?: "newest" | "oldest";
+  sort?: "newest" | "oldest" | "priority";
   limit?: number;
   offset?: number;
 }) {
@@ -97,6 +101,14 @@ export function useIssueRefund(returnNumber: string) {
   const invalidate = useInvalidateAll();
   return useMutation({
     mutationFn: (note?: string) => refundWithRetry(returnNumber, { note }),
+    onSuccess: invalidate,
+  });
+}
+
+export function useReassignTeam(returnNumber: string) {
+  const invalidate = useInvalidateAll();
+  return useMutation({
+    mutationFn: (team: Team) => api.reassignTeam(returnNumber, team),
     onSuccess: invalidate,
   });
 }

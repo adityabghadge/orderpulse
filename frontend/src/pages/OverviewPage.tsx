@@ -1,11 +1,11 @@
 import { Link, useNavigate } from "react-router-dom";
 
-import { useOverview, useReturns } from "../api/hooks";
+import { useModels, useOverview, useReturns } from "../api/hooks";
 import type { OverviewStats } from "../api/types";
 import { OrdersChart } from "../components/OrdersChart";
 import { Pipeline } from "../components/Pipeline";
 import { ErrorState, TableSkeleton } from "../components/States";
-import { ReturnStatusPill } from "../components/StatusPill";
+import { PriorityPill } from "../components/StatusPill";
 import {
   formatAge,
   formatCompactMoney,
@@ -53,6 +53,8 @@ function Metrics({ stats }: { stats: OverviewStats }) {
 }
 
 function TeamLoad({ stats }: { stats: OverviewStats }) {
+  const { data: models } = useModels();
+  const routing = models?.routing?.metrics;
   const max = Math.max(1, ...stats.open_returns_by_team.map((t) => t.open_returns));
   return (
     <section className="panel">
@@ -71,6 +73,14 @@ function TeamLoad({ stats }: { stats: OverviewStats }) {
             </div>
           ))}
         </div>
+        {routing && (
+          <p className="model-note">
+            New returns are routed by a text model that misroutes{" "}
+            <strong>{(routing.deployed_misroute_rate * 100).toFixed(1)}%</strong> on recent
+            returns, versus {(routing.dropdown_misroute_rate * 100).toFixed(1)}% when routing by
+            the reason customers select.
+          </p>
+        )}
       </div>
     </section>
   );
@@ -80,14 +90,14 @@ function ReviewQueue() {
   const navigate = useNavigate();
   const { data, isLoading, isError, error, refetch } = useReturns({
     status: "requested",
-    sort: "oldest",
+    sort: "priority",
     limit: 6,
   });
 
   return (
     <section className="panel">
       <div className="panel-head">
-        <h2>Waiting longest for review</h2>
+        <h2>Riskiest returns waiting for review</h2>
         <Link to="/returns" className="hint">
           Open the returns queue
         </Link>
@@ -107,7 +117,7 @@ function ReviewQueue() {
                   <th>Customer says</th>
                   <th>Team</th>
                   <th>Waiting</th>
-                  <th>Status</th>
+                  <th>Risk</th>
                 </tr>
               </thead>
               {isLoading || !data ? (
@@ -133,7 +143,7 @@ function ReviewQueue() {
                       <td>{r.assigned_team ? TEAM_LABEL[r.assigned_team] : "–"}</td>
                       <td>{formatAge(r.requested_at)}</td>
                       <td>
-                        <ReturnStatusPill status={r.status} />
+                        <PriorityPill priority={r.priority} />
                       </td>
                     </tr>
                   ))}

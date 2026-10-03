@@ -6,6 +6,7 @@ signal, which is what the return-routing model learns from.
 """
 
 import random
+from dataclasses import dataclass
 
 from app.domain.returns import ReturnReason
 
@@ -87,6 +88,27 @@ SOFT_GOODS_DEFECTS = [
 ]
 SOFT_GOODS = {"apparel", "sports"}
 
+# Real customers are often vague or ambiguous. These texts carry little or no signal about
+# the cause, which keeps any model honest: it can't reach 100% accuracy on them.
+VAGUE_TEXTS = [
+    "Item has an issue, please process my return.",
+    "Not what I expected.",
+    "I want to return this.",
+    "There's a problem with my order.",
+    "Please take this back.",
+    "Not satisfied with this purchase.",
+]
+VAGUE_RATE = 0.10
+
+# Phrases that genuinely fit more than one cause.
+AMBIGUOUS_TEXTS: dict[ReturnReason, list[str]] = {
+    ReturnReason.DAMAGED: ["It arrived broken.", "Came broken, the {product} doesn't work."],
+    ReturnReason.DEFECTIVE: ["It arrived broken.", "Came broken, the {product} doesn't work."],
+    ReturnReason.WRONG_ITEM: ["This isn't what I ordered at all."],
+    ReturnReason.NOT_AS_DESCRIBED: ["This isn't what I ordered at all."],
+}
+AMBIGUOUS_RATE = 0.10
+
 OPENERS = ["", "", "", "Hi, ", "Hello, ", "Unfortunately, ", "Not happy. "]
 CLOSERS = [
     "",
@@ -97,6 +119,8 @@ CLOSERS = [
     " Want my money back.",
     " Very disappointed.",
 ]
+NEGATIVE_OPENERS = {"Not happy. "}
+NEGATIVE_CLOSERS = {" Want my money back.", " Very disappointed."}
 
 # How often the customer picks the dropdown option that matches what actually happened.
 DROPDOWN_ACCURACY = 0.78
@@ -128,14 +152,21 @@ CAUSE_WEIGHTS: dict[ReturnReason, int] = {
 APPAREL_ONLY = {ReturnReason.SIZE_FIT}
 
 
-def sample_return_reason(
-    rng: random.Random, product_name: str, category: str
-) -> tuple[ReturnReason, ReturnReason, str]:
-    """Return (true_cause, dropdown_choice, written_text) for one simulated return."""
+@dataclass(frozen=True)
+class SampledReason:
+    true_cause: ReturnReason  # what actually happened
+    picked: ReturnReason  # what the customer chose in the dropdown
+    text: str  # what the customer wrote
+    upset: bool  # whether the customer sounds angry
+
+
+def sample_return_reason(rng: random.Random, product_name: str, category: str) -> SampledReason:
+    """Simulate one customer's return request."""
     causes = [c for c in CAUSE_WEIGHTS if category in SOFT_GOODS or c not in APPAREL_ONLY]
     true_cause = rng.choices(causes, weights=[CAUSE_WEIGHTS[c] for c in causes])[0]
 
     picked = true_cause if rng.random() < DROPDOWN_ACCURACY else rng.choice(CONFUSIONS[true_cause])
+
     templates = TEMPLATES[true_cause]
     if true_cause is ReturnReason.DEFECTIVE:
         if category in DEVICES:
@@ -144,9 +175,20 @@ def sample_return_reason(
             templates = templates + SOFT_GOODS_DEFECTS
         elif category == "books":
             templates = templates + BOOK_DEFECTS
+    roll = rng.random()
+    if roll < VAGUE_RATE:
+        templates = VAGUE_TEXTS
+    elif roll < VAGUE_RATE + AMBIGUOUS_RATE and true_cause in AMBIGUOUS_TEXTS:
+        templates = AMBIGUOUS_TEXTS[true_cause]
+
     body = rng.choice(templates).format(product=product_name.lower())
-    opener = rng.choice(OPENERS)
+    opener, closer = rng.choice(OPENERS), rng.choice(CLOSERS)
     if opener.endswith(", ") and not body.startswith("I "):
         body = body[0].lower() + body[1:]
-    text = f"{opener}{body}{rng.choice(CLOSERS)}"
-    return true_cause, picked, text[0].upper() + text[1:]
+    text = f"{opener}{body}{closer}"
+    return SampledReason(
+        true_cause=true_cause,
+        picked=picked,
+        text=text[0].upper() + text[1:],
+        upset=opener in NEGATIVE_OPENERS or closer in NEGATIVE_CLOSERS,
+    )

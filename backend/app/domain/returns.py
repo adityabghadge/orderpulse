@@ -81,3 +81,16 @@ def route_by_reason(reason: ReturnReason) -> Team:
     a text-based model has to beat.
     """
     return REASON_TO_TEAM[reason]
+
+
+# Cut-offs on the priority model's escalation probability.
+HIGH_PRIORITY = 0.40
+MEDIUM_PRIORITY = 0.15
+
+
+def priority_level(score: float | None) -> str | None:
+    if score is None:
+        return None
+    if score >= HIGH_PRIORITY:
+        return "high"
+    return "medium" if score >= MEDIUM_PRIORITY else "low"

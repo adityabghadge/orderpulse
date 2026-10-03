@@ -21,3 +21,7 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+artifacts/
+
+# Local Redis snapshots
+dump.rdb

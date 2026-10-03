@@ -15,6 +15,8 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 - **Safe under concurrency**: status changes lock the order row (`SELECT … FOR UPDATE`), so simultaneous updates apply exactly once.
 - **Server-side money math**: totals are computed from line items in integer cents. Clients can't set them.
 - **Consistent errors**: every failure returns `{"error": {"code", "message"}}`.
+- **ML return routing**: a PyTorch text classifier reads what the customer wrote and routes each return to the right team, falling back to the customer's selected reason when it isn't confident. Agents can reassign a return, and their corrections become future training data.
+- **ML prioritization**: an XGBoost model scores each new return's chance of escalating (a complaint or chargeback), so the review queue can work the riskiest returns first.
 - **Fast at scale**: the dashboard overview reads precomputed daily totals from a PostgreSQL materialized view (refreshed concurrently in the background) and computes only today live, behind a Redis cache that writes invalidate immediately. If Redis goes down, the API keeps serving from the database.
 - **Response timing**: every response carries an `X-Response-Time-Ms` header, and the overview reports `X-Cache: HIT` or `MISS`.
 - **Operations dashboard**: a React console with a live order pipeline, key metrics, a first-in-first-out returns queue, and order detail pages where operators move orders forward, start returns, and issue refunds. Refunds retry network failures with the same idempotency key.
@@ -27,6 +29,7 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 | Dashboard | React 19, TypeScript, Vite, React Router, TanStack Query, Recharts |
 | API | Python 3.13, FastAPI, Pydantic |
 | Data | PostgreSQL 16 (materialized views), Redis 7, SQLAlchemy 2, Alembic migrations |
+| Machine learning | PyTorch, XGBoost, NumPy |
 | Testing & quality | pytest, Vitest, Testing Library, Ruff |
 | Infrastructure | Docker Compose, GitHub Actions |
 
@@ -35,17 +38,18 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 Requirements: Docker Desktop, Python 3.11+, Node.js 20+, and `make`.
 
 ```bash
-make setup   # start Postgres, install dependencies, run migrations, load demo data
+make setup   # start services, install dependencies, migrate, load demo data, train models
 make api     # API at http://localhost:8000 (interactive docs at /docs)
 make web     # dashboard at http://localhost:5173 (in a second terminal)
 ```
 
 Run `make` to see all commands, including `make test` and `make lint`.
 
-To try it at scale, load 400,000 orders and measure the overview:
+To try it at scale, load 400,000 orders, retrain, and measure the overview:
 
 ```bash
 make seed-large   # about a minute
+make train        # about 20 seconds
 make bench
 ```
 
@@ -65,7 +69,9 @@ make bench
 | `POST` | `/api/v1/returns/{return_number}/refund` | Issue the refund (requires `Idempotency-Key`) |
 | `GET` | `/api/v1/customers` | Search customers by name or email |
 | `GET` | `/api/v1/customers/{id}` | Customer details |
+| `POST` | `/api/v1/returns/{return_number}/team` | Reassign a return to another team |
 | `GET` | `/api/v1/stats/overview` | Pipeline, metrics, and trends for the dashboard |
+| `GET` | `/api/v1/ml/models` | Loaded models, training date, and held-out evaluation metrics |
 
 ## Screenshots
 
@@ -91,6 +97,7 @@ backend/
     schemas/    Request and response contracts (Pydantic)
     core/       Settings, error handling, idempotency
     integrations/  External services (payment provider)
+    ml/         Routing and priority models, training, evaluation
     db/         Database engine and sessions
     seed.py     Demo data generator
   alembic/      Database migrations
@@ -106,6 +113,29 @@ make web-test  # frontend type-check and tests
 ```
 
 Backend tests run against a dedicated `orderpulse_test` database built from the real migrations, and cover order and return lifecycles, validation, error formats, idempotent retries, payment-provider failures, and concurrent updates.
+
+## Machine learning
+
+Both models train on closed returns, whose outcomes are known: the team that actually handled each one, and whether the customer escalated. `make train` uses a **time-based split**, learning from the oldest 80% and testing on the newest 20%, the way the models are used in production. Each model is compared against the simplest reasonable alternative.
+
+**Return routing (PyTorch).** Customers often pick the wrong reason from the dropdown: a box crushed in shipping gets reported as "defective" and lands with the wrong team. The model is a compact fastText-style classifier: token and word-pair embeddings are averaged, then combined with the selected reason and passed through a linear layer. Below 60% confidence it defers to the dropdown.
+
+**Prioritization (XGBoost).** Gradient-boosted trees estimate each return's chance of escalating from what's known at request time: refund and order size, membership, the customer's return history, the reason, and wording that signals frustration. Precision@20 asks: of the 20 returns the model would put at the top of the queue, how many actually escalated?
+
+Results on the 400,000-order dataset (39,744 training and 9,936 test returns):
+
+| Routing | Misrouted |
+|---|---|
+| By the customer's selected reason | 17.1% |
+| By the model, with fallback below 60% confidence | 5.3% |
+
+| Prioritization | Precision@20 | AUC |
+|---|---|---|
+| Random order (= escalation rate) | 0.15 | 0.50 |
+| Largest refund first | 0.55 | 0.68 |
+| XGBoost model | 0.80 | 0.75 |
+
+The demo data is synthetic, but built to be honest: some customer messages are vague or ambiguous, and a small share of historical labels are wrong, so neither model can score perfectly. If no trained model is present, or one fails to load, the API falls back to rule-based routing.
 
 ## Design notes
 

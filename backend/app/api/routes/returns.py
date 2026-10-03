@@ -13,6 +13,7 @@ from app.schemas.returns import (
     ReturnOut,
     ReturnPage,
     ReturnStatusUpdate,
+    TeamUpdate,
 )
 from app.services import returns as return_service
 
@@ -36,7 +37,7 @@ def list_returns(
     status_filter: Annotated[ReturnStatus | None, Query(alias="status")] = None,
     reason: ReturnReason | None = None,
     order_number: Annotated[str | None, Query(max_length=20)] = None,
-    sort: Literal["newest", "oldest"] = "newest",
+    sort: Literal["newest", "oldest", "priority"] = "newest",
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> ReturnPage:
@@ -45,7 +46,7 @@ def list_returns(
         status=status_filter,
         reason=reason,
         order_number=order_number,
-        oldest_first=sort == "oldest",
+        sort=sort,
         limit=limit,
         offset=offset,
     )
@@ -67,6 +68,12 @@ def update_return_status(
     return return_service.change_return_status(
         db, return_number, ReturnStatus(payload.status), payload.note
     )
+
+
+@router.post("/{return_number}/team", response_model=ReturnOut)
+def reassign_team(return_number: str, payload: TeamUpdate, db: DbSession) -> ReturnOut:
+    """Send a return to a different team (an agent correcting the routing)."""
+    return return_service.reassign_team(db, return_number, payload.team)
 
 
 @router.post(

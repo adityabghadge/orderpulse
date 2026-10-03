@@ -1,4 +1,5 @@
 import type {
+  ModelSummary,
   OrderDetail,
   OrderStatus,
   OrderSummary,
@@ -9,6 +10,7 @@ import type {
   ReturnReason,
   ReturnRecord,
   ReturnStatus,
+  Team,
 } from "./types";
 
 /** An error response from the API, in its standard `{"error": {code, message}}` shape. */
@@ -83,10 +85,15 @@ export const api = {
     status?: ReturnStatus;
     reason?: ReturnReason;
     order_number?: string;
-    sort?: "newest" | "oldest";
+    sort?: "newest" | "oldest" | "priority";
     limit?: number;
     offset?: number;
   }) => request<Page<ReturnRecord>>("GET", "/returns", { query }),
+
+  reassignTeam: (returnNumber: string, team: Team) =>
+    request<ReturnRecord>("POST", `/returns/${returnNumber}/team`, { body: { team } }),
+
+  models: () => request<ModelSummary>("GET", "/ml/models"),
 
   getReturn: (returnNumber: string) => request<ReturnRecord>("GET", `/returns/${returnNumber}`),
 

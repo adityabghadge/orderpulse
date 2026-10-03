@@ -5,6 +5,7 @@ so running the suite can't wipe the data you're working with.
 """
 
 import os
+import tempfile
 
 os.environ["ORDERPULSE_DATABASE_URL"] = os.environ.get(
     "ORDERPULSE_TEST_DATABASE_URL",
@@ -15,6 +16,9 @@ os.environ["ORDERPULSE_REDIS_URL"] = os.environ.get(
     "ORDERPULSE_TEST_REDIS_URL", "redis://localhost:6380/15"
 )
 os.environ["ORDERPULSE_BACKGROUND_JOBS"] = "false"
+# By default, tests run without trained models (pure rule-based routing). ML tests train
+# their own small models into a temporary folder.
+os.environ["ORDERPULSE_MODEL_DIR"] = tempfile.mkdtemp(prefix="orderpulse-no-models-")
 
 from collections.abc import Iterator  # noqa: E402
 from pathlib import Path  # noqa: E402

@@ -12,10 +12,12 @@ from app.domain.returns import (
     RETURN_WINDOW_DAYS,
     ReturnReason,
     ReturnStatus,
+    Team,
     can_transition_return,
-    route_by_reason,
 )
 from app.integrations.payments import PaymentGateway, PaymentGatewayError
+from app.ml import registry
+from app.ml.priority import PriorityInput
 from app.models import Order, Refund, Return
 from app.schemas.returns import RefundOut, ReturnCreate
 from app.services.stats import invalidate_overview
@@ -47,20 +49,57 @@ def create_return(db: Session, order_number: str, data: ReturnCreate) -> Return:
     if data.quantity > remaining:
         raise ConflictError(f"Only {remaining} unit(s) of this item can still be returned")
 
+    reason_text = data.reason_text.strip()
+    refund_amount = item.unit_price_cents * data.quantity
+    now = datetime.now(UTC)
+
+    # Route with the model when it's confident; otherwise trust the dropdown.
+    routing = registry.route(reason_text, data.reason_code.value)
+    customer_returns = db.scalar(
+        select(func.count())
+        .select_from(Return)
+        .join(Order)
+        .where(Order.customer_id == order.customer_id)
+    )
+    priority = registry.score_many(
+        [
+            PriorityInput(
+                refund_amount_cents=refund_amount,
+                order_total_cents=order.total_cents,
+                plus_member=order.customer.tier == "plus",
+                customer_other_returns=customer_returns or 0,
+                days_since_delivery=(now - order.delivered_at).total_seconds() / 86400,
+                reason_code=data.reason_code.value,
+                reason_text=reason_text,
+            )
+        ]
+    )[0]
+
     record = Return(
         order_id=order.id,
         order_item_id=item.id,
         quantity=data.quantity,
         reason_code=data.reason_code.value,
-        reason_text=data.reason_text.strip(),
+        reason_text=reason_text,
         status=ReturnStatus.REQUESTED.value,
-        assigned_team=route_by_reason(data.reason_code).value,
-        refund_amount_cents=item.unit_price_cents * data.quantity,
+        assigned_team=routing.team,
+        routing_source=routing.source,
+        routing_confidence=routing.confidence,
+        priority_score=priority,
+        refund_amount_cents=refund_amount,
     )
     db.add(record)
     db.commit()
     invalidate_overview()
     return get_return(db, record.return_number)
+
+
+_SORTS = {
+    "newest": (Return.requested_at.desc(), Return.id.desc()),
+    "oldest": (Return.requested_at.asc(), Return.id.asc()),
+    # Riskiest first; unscored returns go last, oldest first among equals.
+    "priority": (Return.priority_score.desc().nulls_last(), Return.requested_at.asc()),
+}
 
 
 def get_return(db: Session, return_number: str) -> Return:
@@ -76,7 +115,7 @@ def list_returns(
     status: ReturnStatus | None = None,
     order_number: str | None = None,
     reason: ReturnReason | None = None,
-    oldest_first: bool = False,
+    sort: str = "newest",
     limit: int = 25,
     offset: int = 0,
 ) -> tuple[list[Return], int]:
@@ -90,17 +129,7 @@ def list_returns(
 
     total = db.scalar(select(func.count()).select_from(Return).where(*filters)) or 0
     rows = db.scalars(
-        select(Return)
-        .where(*filters)
-        .order_by(
-            *(
-                (Return.requested_at.asc(), Return.id.asc())
-                if oldest_first
-                else (Return.requested_at.desc(), Return.id.desc())
-            )
-        )
-        .limit(limit)
-        .offset(offset)
+        select(Return).where(*filters).order_by(*_SORTS[sort]).limit(limit).offset(offset)
     ).unique()
     return list(rows), total
 
@@ -118,6 +147,20 @@ def change_return_status(
         record.decision_note = note
     if target is ReturnStatus.REJECTED:
         record.resolved_at = datetime.now(UTC)
+    db.commit()
+    invalidate_overview()
+    return get_return(db, return_number)
+
+
+def reassign_team(db: Session, return_number: str, team: Team) -> Return:
+    """An agent corrects the routing. These corrections become future training labels."""
+    record = _lock_return(db, return_number)
+    if record.status not in {
+        s.value for s in (ReturnStatus.REQUESTED, ReturnStatus.APPROVED, ReturnStatus.RECEIVED)
+    }:
+        raise ConflictError(f"Return {return_number} is closed and can't be reassigned")
+    record.assigned_team = team.value
+    record.routing_source = "agent"
     db.commit()
     invalidate_overview()
     return get_return(db, return_number)

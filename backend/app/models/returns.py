@@ -3,8 +3,10 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -39,7 +41,12 @@ class Return(TimestampMixin, Base):
             f"assigned_team IS NULL OR assigned_team IN ({_in(Team)})", name="team_valid"
         ),
         CheckConstraint("quantity > 0", name="quantity_positive"),
+        CheckConstraint(
+            "routing_source IS NULL OR routing_source IN ('rule', 'model', 'agent')",
+            name="routing_source_valid",
+        ),
         Index("ix_returns_status_requested_at", "status", "requested_at"),
+        Index("ix_returns_status_priority_score", "status", "priority_score"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -53,6 +60,13 @@ class Return(TimestampMixin, Base):
     reason_text: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(16), default=ReturnStatus.REQUESTED.value)
     assigned_team: Mapped[str | None] = mapped_column(String(24))
+    # How the team was chosen: the dropdown rule, the routing model, or an agent's correction.
+    routing_source: Mapped[str | None] = mapped_column(String(8))
+    routing_confidence: Mapped[float | None] = mapped_column(Float)
+    # Model-estimated probability that this return escalates (complaint or chargeback).
+    priority_score: Mapped[float | None] = mapped_column(Float)
+    # Known only after a return is closed: did the customer escalate? (training label)
+    escalated: Mapped[bool | None] = mapped_column(Boolean)
     decision_note: Mapped[str | None] = mapped_column(Text)
     requested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
