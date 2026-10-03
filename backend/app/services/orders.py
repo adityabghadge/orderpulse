@@ -14,6 +14,7 @@ from app.core.errors import ConflictError, NotFoundError
 from app.domain.order_status import OrderStatus, can_transition
 from app.models import Customer, Order, OrderItem, OrderStatusEvent
 from app.schemas.order import OrderCreate
+from app.services.stats import invalidate_overview
 
 
 def create_order(db: Session, data: OrderCreate) -> Order:
@@ -40,6 +41,7 @@ def create_order(db: Session, data: OrderCreate) -> Order:
     )
     db.add(order)
     db.commit()
+    invalidate_overview()
     return get_order(db, order.order_number)
 
 
@@ -109,4 +111,5 @@ def change_status(
         OrderStatusEvent(from_status=current.value, to_status=target.value, actor=actor, note=note)
     )
     db.commit()
+    invalidate_overview()
     return get_order(db, order_number)

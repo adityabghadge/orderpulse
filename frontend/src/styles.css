@@ -265,6 +265,8 @@ textarea {
 }
 
 .main {
+  width: 100%;
+  max-width: 1440px;
   min-width: 0;
   padding: 28px 36px 64px;
 }
@@ -891,7 +893,7 @@ textarea {
 
 .bar-row {
   display: grid;
-  grid-template-columns: 110px 1fr 36px;
+  grid-template-columns: max-content 1fr 40px;
   align-items: center;
   gap: 10px;
   font-size: 0.9rem;
@@ -907,6 +909,10 @@ textarea {
   height: 100%;
   background: var(--series-1);
   border-radius: 0 4px 4px 0;
+}
+
+.bar-row > span:first-child {
+  min-width: 108px;
 }
 
 .bar-row .num {

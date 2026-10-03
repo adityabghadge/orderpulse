@@ -58,7 +58,7 @@ class Order(TimestampMixin, Base):
     placed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
-    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
     customer: Mapped["Customer"] = relationship(back_populates="orders", lazy="joined")
     items: Mapped[list["OrderItem"]] = relationship(
@@ -106,6 +106,9 @@ class OrderStatusEvent(Base):
     """Append-only audit trail: one row every time an order changes status."""
 
     __tablename__ = "order_status_events"
+    __table_args__ = (
+        Index("ix_order_status_events_to_status_created_at", "to_status", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id", ondelete="CASCADE"), index=True)

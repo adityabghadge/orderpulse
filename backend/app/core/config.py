@@ -16,6 +16,13 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://orderpulse:orderpulse@localhost:5433/orderpulse"
     cors_origins: list[str] = ["http://localhost:5173"]
 
+    redis_url: str = "redis://localhost:6380/0"
+    # How long the dashboard overview may be served from cache (writes clear it immediately).
+    overview_cache_seconds: int = 30
+    # How often the API refreshes the precomputed daily totals in the background.
+    stats_refresh_seconds: int = 300
+    background_jobs: bool = True
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -18,6 +18,7 @@ from app.domain.returns import (
 from app.integrations.payments import PaymentGateway, PaymentGatewayError
 from app.models import Order, Refund, Return
 from app.schemas.returns import RefundOut, ReturnCreate
+from app.services.stats import invalidate_overview
 
 
 def create_return(db: Session, order_number: str, data: ReturnCreate) -> Return:
@@ -58,6 +59,7 @@ def create_return(db: Session, order_number: str, data: ReturnCreate) -> Return:
     )
     db.add(record)
     db.commit()
+    invalidate_overview()
     return get_return(db, record.return_number)
 
 
@@ -117,6 +119,7 @@ def change_return_status(
     if target is ReturnStatus.REJECTED:
         record.resolved_at = datetime.now(UTC)
     db.commit()
+    invalidate_overview()
     return get_return(db, return_number)
 
 
@@ -170,12 +173,15 @@ def issue_refund(
         db.flush()
         return 201, RefundOut.model_validate(refund).model_dump(mode="json")
 
-    return run_idempotent(
+    result = run_idempotent(
         db,
         key=idempotency_key,
         request_fingerprint=fingerprint("refund", return_number, note),
         operation=operation,
     )
+    if not result.replayed:
+        invalidate_overview()
+    return result
 
 
 def _lock_return(db: Session, return_number: str) -> Return:

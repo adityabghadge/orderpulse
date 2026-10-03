@@ -25,7 +25,9 @@ class Refund(Base):
     status: Mapped[str] = mapped_column(String(16), default="succeeded")
     provider_reference: Mapped[str] = mapped_column(String(64), unique=True)
     idempotency_key: Mapped[str] = mapped_column(String(255))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
 
     return_: Mapped["Return"] = relationship(back_populates="refund")
 

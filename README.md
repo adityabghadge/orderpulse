@@ -15,7 +15,8 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 - **Safe under concurrency**: status changes lock the order row (`SELECT … FOR UPDATE`), so simultaneous updates apply exactly once.
 - **Server-side money math**: totals are computed from line items in integer cents. Clients can't set them.
 - **Consistent errors**: every failure returns `{"error": {"code", "message"}}`.
-- **Response timing**: every response carries an `X-Response-Time-Ms` header for latency tracking.
+- **Fast at scale**: the dashboard overview reads precomputed daily totals from a PostgreSQL materialized view (refreshed concurrently in the background) and computes only today live, behind a Redis cache that writes invalidate immediately. If Redis goes down, the API keeps serving from the database.
+- **Response timing**: every response carries an `X-Response-Time-Ms` header, and the overview reports `X-Cache: HIT` or `MISS`.
 - **Operations dashboard**: a React console with a live order pipeline, key metrics, a first-in-first-out returns queue, and order detail pages where operators move orders forward, start returns, and issue refunds. Refunds retry network failures with the same idempotency key.
 - **Realistic demo data**: a seeded generator simulates thousands of orders with true-to-life fulfillment timelines.
 
@@ -25,7 +26,7 @@ Operations platform for e-commerce support teams: track orders through fulfillme
 |---|---|
 | Dashboard | React 19, TypeScript, Vite, React Router, TanStack Query, Recharts |
 | API | Python 3.13, FastAPI, Pydantic |
-| Database | PostgreSQL 16, SQLAlchemy 2, Alembic migrations |
+| Data | PostgreSQL 16 (materialized views), Redis 7, SQLAlchemy 2, Alembic migrations |
 | Testing & quality | pytest, Vitest, Testing Library, Ruff |
 | Infrastructure | Docker Compose, GitHub Actions |
 
@@ -40,6 +41,13 @@ make web     # dashboard at http://localhost:5173 (in a second terminal)
 ```
 
 Run `make` to see all commands, including `make test` and `make lint`.
+
+To try it at scale, load 400,000 orders and measure the overview:
+
+```bash
+make seed-large   # about a minute
+make bench
+```
 
 ## API
 
@@ -86,7 +94,7 @@ backend/
     db/         Database engine and sessions
     seed.py     Demo data generator
   alembic/      Database migrations
-  tests/        API, concurrency, and state-machine tests
+  tests/        API, concurrency, caching, and state-machine tests
 infra/          Database initialization
 ```
 
@@ -100,6 +108,15 @@ make web-test  # frontend type-check and tests
 Backend tests run against a dedicated `orderpulse_test` database built from the real migrations, and cover order and return lifecycles, validation, error formats, idempotent retries, payment-provider failures, and concurrent updates.
 
 ## Design notes
+
+**How the overview stays fast as data grows.** The dashboard's headline numbers cover the last 30 days. Recomputing them from raw orders on every request gets slower as history grows, so the work is split:
+
+1. *Finished days* come from `daily_operations`, a materialized view holding one row of totals per day. The API refreshes it every 5 minutes with `REFRESH MATERIALIZED VIEW CONCURRENTLY`, so readers are never blocked, and a Postgres advisory lock ensures only one API process refreshes at a time.
+2. *Today* is always computed live with indexed range queries, so the numbers operators act on are never stale.
+3. *The finished response* is cached in Redis for 30 seconds. Any write that changes the numbers (an order status change, a return, a refund) deletes the cached copy, so operators see their own changes immediately.
+4. *Redis is optional at runtime*: on any Redis error the cache steps aside for 15 seconds (a simple circuit breaker) and requests are served from the database.
+
+A test asserts that the fast path returns exactly the same numbers as a full live aggregation.
 
 **Why refunds can't be paid twice.** Two independent safeguards:
 

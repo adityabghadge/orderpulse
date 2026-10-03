@@ -10,6 +10,11 @@ os.environ["ORDERPULSE_DATABASE_URL"] = os.environ.get(
     "ORDERPULSE_TEST_DATABASE_URL",
     "postgresql+psycopg://orderpulse:orderpulse@localhost:5433/orderpulse_test",
 )
+# Redis database 15 is reserved for tests, separate from development data in database 0.
+os.environ["ORDERPULSE_REDIS_URL"] = os.environ.get(
+    "ORDERPULSE_TEST_REDIS_URL", "redis://localhost:6380/15"
+)
+os.environ["ORDERPULSE_BACKGROUND_JOBS"] = "false"
 
 from collections.abc import Iterator  # noqa: E402
 from pathlib import Path  # noqa: E402
@@ -21,6 +26,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
+from app.core.cache import get_cache  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import Customer  # noqa: E402
@@ -37,7 +43,8 @@ def migrated_database() -> None:
 
 
 @pytest.fixture(autouse=True)
-def clean_tables() -> Iterator[None]:
+def clean_state() -> Iterator[None]:
+    get_cache()._client.flushdb()
     yield
     with SessionLocal() as db:
         db.execute(
@@ -46,6 +53,7 @@ def clean_tables() -> Iterator[None]:
                 "order_items, orders, customers RESTART IDENTITY CASCADE"
             )
         )
+        db.execute(text("REFRESH MATERIALIZED VIEW daily_operations"))
         db.commit()
 
 

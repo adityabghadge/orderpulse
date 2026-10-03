@@ -1,5 +1,5 @@
 .DEFAULT_GOAL := help
-.PHONY: help setup up down reset install migrate seed api test lint format web-install web web-test web-build
+.PHONY: help setup up down reset install migrate seed seed-large bench api test lint format web-install web web-test web-build
 
 VENV := backend/.venv/bin
 
@@ -8,7 +8,7 @@ help: ## Show available commands
 
 setup: up install web-install migrate seed ## First-time setup: database, dependencies, schema, demo data
 
-up: ## Start Postgres in Docker and wait until it is ready
+up: ## Start Postgres and Redis in Docker and wait until they are ready
 	docker compose up -d --wait
 
 down: ## Stop the containers (data is kept)
@@ -25,6 +25,12 @@ migrate: ## Apply database migrations
 
 seed: ## Load demo data (wipes existing data)
 	cd backend && .venv/bin/python -m app.seed
+
+seed-large: ## Load 400,000 orders for performance testing (wipes existing data, ~1 min)
+	cd backend && .venv/bin/python -m app.seed --customers 25000 --orders 400000
+
+bench: ## Measure overview latency: live queries vs materialized view vs Redis cache
+	cd backend && ORDERPULSE_BACKGROUND_JOBS=false .venv/bin/python -m app.bench
 
 api: ## Run the API with auto-reload at http://localhost:8000
 	cd backend && .venv/bin/uvicorn app.main:app --reload --reload-dir app

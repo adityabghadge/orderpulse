@@ -67,7 +67,7 @@ function TeamLoad({ stats }: { stats: OverviewStats }) {
               <div className="bar-track" aria-hidden="true">
                 <div className="bar-fill" style={{ width: `${(row.open_returns / max) * 100}%` }} />
               </div>
-              <span className="num">{row.open_returns}</span>
+              <span className="num">{formatNumber(row.open_returns)}</span>
             </div>
           ))}
         </div>

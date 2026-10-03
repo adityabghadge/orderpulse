@@ -19,11 +19,8 @@ TEMPLATES: dict[ReturnReason, list[str]] = {
         "Arrived with a big dent, looks like it was dropped in transit.",
     ],
     ReturnReason.DEFECTIVE: [
-        "The {product} stopped working after two days.",
-        "It won't turn on at all, tried charging it overnight.",
-        "{product} keeps shutting off randomly, seems faulty.",
-        "Battery drains in an hour, this unit is defective.",
-        "Makes a loud buzzing noise, something inside is broken.",
+        "There's a manufacturing flaw, the {product} is faulty out of the box.",
+        "Quality problem, the {product} started falling apart within days.",
     ],
     ReturnReason.WRONG_ITEM: [
         "I ordered the {product} but received something completely different.",
@@ -68,7 +65,21 @@ TEMPLATES: dict[ReturnReason, list[str]] = {
     ],
 }
 
-# Defects that only make sense for clothing and gear.
+# Defects that only make sense for some kinds of products.
+DEVICE_DEFECTS = [
+    "The {product} stopped working after two days.",
+    "It won't turn on at all, tried charging it overnight.",
+    "{product} keeps shutting off randomly, seems faulty.",
+    "Battery drains in an hour, this unit is defective.",
+    "Makes a loud buzzing noise, something inside is broken.",
+]
+DEVICES = {"electronics", "home", "beauty"}
+BOOK_DEFECTS = [
+    "Several pages are blank and some are printed upside down.",
+    "The binding came apart the first time I opened it.",
+    "Pages are printed out of order, a whole chapter is missing.",
+]
+
 SOFT_GOODS_DEFECTS = [
     "The zipper broke the first time I used it.",
     "Stitching came apart after one wash.",
@@ -126,8 +137,13 @@ def sample_return_reason(
 
     picked = true_cause if rng.random() < DROPDOWN_ACCURACY else rng.choice(CONFUSIONS[true_cause])
     templates = TEMPLATES[true_cause]
-    if true_cause is ReturnReason.DEFECTIVE and category in SOFT_GOODS:
-        templates = templates + SOFT_GOODS_DEFECTS
+    if true_cause is ReturnReason.DEFECTIVE:
+        if category in DEVICES:
+            templates = templates + DEVICE_DEFECTS
+        elif category in SOFT_GOODS:
+            templates = templates + SOFT_GOODS_DEFECTS
+        elif category == "books":
+            templates = templates + BOOK_DEFECTS
     body = rng.choice(templates).format(product=product_name.lower())
     opener = rng.choice(OPENERS)
     if opener.endswith(", ") and not body.startswith("I "):
