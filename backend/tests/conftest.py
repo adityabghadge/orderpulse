@@ -42,8 +42,8 @@ def clean_tables() -> Iterator[None]:
     with SessionLocal() as db:
         db.execute(
             text(
-                "TRUNCATE order_status_events, order_items, orders, customers "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE idempotency_keys, refunds, returns, order_status_events, "
+                "order_items, orders, customers RESTART IDENTITY CASCADE"
             )
         )
         db.commit()
@@ -56,8 +56,9 @@ def db() -> Iterator[Session]:
 
 
 @pytest.fixture
-def client() -> TestClient:
-    return TestClient(app)
+def client() -> Iterator[TestClient]:
+    yield TestClient(app)
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -91,3 +92,13 @@ def order_payload(customer: Customer) -> dict:
             },
         ],
     }
+
+
+@pytest.fixture
+def delivered_order(client: TestClient, order_payload: dict) -> dict:
+    order = client.post("/api/v1/orders", json=order_payload).json()
+    for status in ["packed", "shipped", "out_for_delivery", "delivered"]:
+        order = client.post(
+            f"/api/v1/orders/{order['order_number']}/status", json={"status": status}
+        ).json()
+    return order

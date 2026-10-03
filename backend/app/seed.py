@@ -1,4 +1,4 @@
-"""Generate realistic demo data: customers, orders, line items and status histories.
+"""Generate realistic demo data: customers, orders, status histories, returns and refunds.
 
 Usage:
     python -m app.seed                      # 500 customers, 5,000 orders
@@ -12,16 +12,19 @@ The random generator is seeded, so the same command always produces the same dat
 import argparse
 import random
 import time
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from faker import Faker
-from sqlalchemy import insert, text
+from sqlalchemy import insert, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
 from app.domain.order_status import OrderStatus
-from app.models import Customer, Order, OrderItem, OrderStatusEvent
+from app.domain.returns import REASON_TO_TEAM, RETURN_WINDOW_DAYS, ReturnStatus
+from app.models import Customer, Order, OrderItem, OrderStatusEvent, Refund, Return
+from app.return_reasons import sample_return_reason
 
 # (sku, name, category, typical price in dollars)
 CATALOG: list[tuple[str, str, str, float]] = [
@@ -75,16 +78,20 @@ STEP_DURATIONS: dict[OrderStatus, tuple[float, float]] = {
 }
 HAPPY_PATH = [OrderStatus.PACKED, OrderStatus.SHIPPED, OrderStatus.OUT_FOR_DELIVERY]
 CANCEL_RATE = 0.04
+RETURN_RATE = 0.15
+REJECT_RATE = 0.08
 BATCH_SIZE = 2000
 
 
 def _reset(db: Session) -> None:
     db.execute(
         text(
-            "TRUNCATE order_status_events, order_items, orders, customers RESTART IDENTITY CASCADE"
+            "TRUNCATE idempotency_keys, refunds, returns, order_status_events, order_items, "
+            "orders, customers RESTART IDENTITY CASCADE"
         )
     )
     db.execute(text("ALTER SEQUENCE order_number_seq RESTART WITH 100000"))
+    db.execute(text("ALTER SEQUENCE return_number_seq RESTART WITH 500000"))
 
 
 def _make_customers(fake: Faker, rng: random.Random, count: int) -> list[dict]:
@@ -214,10 +221,112 @@ def seed(customer_count: int, order_count: int, random_seed: int = 42) -> None:
             db.execute(insert(OrderItem), item_rows)
             db.execute(insert(OrderStatusEvent), event_rows)
 
+        return_count = _seed_returns(db, rng, now)
         db.commit()
 
     elapsed = time.perf_counter() - started
-    print(f"Seeded {customer_count:,} customers and {order_count:,} orders in {elapsed:.1f}s")
+    print(
+        f"Seeded {customer_count:,} customers, {order_count:,} orders "
+        f"and {return_count:,} returns in {elapsed:.1f}s"
+    )
+
+
+def _return_status(rng: random.Random, age_days: float) -> ReturnStatus:
+    """Where a return would be in its lifecycle, given how long ago it was requested."""
+    if age_days < 1:
+        return ReturnStatus.REQUESTED
+    if rng.random() < REJECT_RATE:
+        return ReturnStatus.REJECTED
+    if age_days < 3:
+        return ReturnStatus.APPROVED
+    if age_days < 7:
+        return ReturnStatus.RECEIVED
+    return ReturnStatus.REFUNDED
+
+
+def _seed_returns(db: Session, rng: random.Random, now: datetime) -> int:
+    delivered_items = db.execute(
+        select(
+            OrderItem.id,
+            OrderItem.order_id,
+            OrderItem.quantity,
+            OrderItem.unit_price_cents,
+            OrderItem.product_name,
+            OrderItem.category,
+            Order.delivered_at,
+            Order.currency,
+        )
+        .join(Order, Order.id == OrderItem.order_id)
+        .where(Order.status == OrderStatus.DELIVERED.value)
+        .order_by(OrderItem.order_id, OrderItem.id)
+    ).all()
+
+    items_by_order: dict[int, list] = {}
+    for row in delivered_items:
+        items_by_order.setdefault(row.order_id, []).append(row)
+
+    return_rows, outcomes = [], []
+    for order_id, items in items_by_order.items():
+        if rng.random() >= RETURN_RATE:
+            continue
+        item = rng.choice(items)
+        requested_at = item.delivered_at + timedelta(
+            days=rng.uniform(0.2, RETURN_WINDOW_DAYS * 0.6)
+        )
+        if requested_at > now:
+            continue
+        true_cause, picked, reason_text = sample_return_reason(
+            rng, item.product_name, item.category
+        )
+        status = _return_status(rng, (now - requested_at).total_seconds() / 86400)
+        quantity = rng.randint(1, item.quantity)
+        resolved_at = None
+        if status in (ReturnStatus.REJECTED, ReturnStatus.REFUNDED):
+            resolved_at = min(now, requested_at + timedelta(days=rng.uniform(1, 9)))
+        return_rows.append(
+            {
+                "order_id": order_id,
+                "order_item_id": item.id,
+                "quantity": quantity,
+                "reason_code": picked.value,
+                "reason_text": reason_text,
+                "status": status.value,
+                # Historical returns carry the team that actually resolved them
+                # (after human triage), not the team the dropdown pointed to.
+                "assigned_team": REASON_TO_TEAM[true_cause].value,
+                "refund_amount_cents": item.unit_price_cents * quantity,
+                "requested_at": requested_at,
+                "resolved_at": resolved_at,
+                "created_at": requested_at,
+                "updated_at": resolved_at or requested_at,
+            }
+        )
+        outcomes.append((status, item.currency, resolved_at))
+
+    if not return_rows:
+        return 0
+    return_ids = list(
+        db.scalars(insert(Return).returning(Return.id, sort_by_parameter_order=True), return_rows)
+    )
+    refund_rows = [
+        {
+            "return_id": return_id,
+            "order_id": row["order_id"],
+            "amount_cents": row["refund_amount_cents"],
+            "currency": currency,
+            "status": "succeeded",
+            "provider_reference": f"re_{uuid.UUID(int=rng.getrandbits(128)).hex[:20]}",
+            "idempotency_key": str(uuid.UUID(int=rng.getrandbits(128))),
+            "created_at": resolved_at,
+        }
+        for return_id, row, (status, currency, resolved_at) in zip(
+            return_ids, return_rows, outcomes, strict=True
+        )
+        if status is ReturnStatus.REFUNDED
+    ]
+    if refund_rows:
+        db.execute(insert(Refund), refund_rows)
+    return len(return_rows)
 
 
 def main() -> None:

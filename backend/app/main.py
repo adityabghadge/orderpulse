@@ -22,7 +22,7 @@ def create_app() -> FastAPI:
         allow_origins=settings.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
-        expose_headers=["X-Response-Time-Ms"],
+        expose_headers=["X-Response-Time-Ms", "Idempotent-Replayed"],
     )
 
     @app.middleware("http")

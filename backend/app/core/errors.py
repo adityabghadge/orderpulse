@@ -32,6 +32,16 @@ class ConflictError(AppError):
     code = "conflict"
 
 
+class IdempotencyKeyReusedError(AppError):
+    status_code = 422
+    code = "idempotency_key_reused"
+
+
+class PaymentProviderError(AppError):
+    status_code = status.HTTP_502_BAD_GATEWAY
+    code = "payment_provider_error"
+
+
 def _error_body(code: str, message: str, details: object | None = None) -> dict:
     body: dict = {"code": code, "message": message}
     if details is not None:
