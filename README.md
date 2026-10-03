@@ -133,7 +133,9 @@ Results on the 400,000-order dataset (39,744 training and 9,936 test returns):
 |---|---|---|
 | Random order (= escalation rate) | 0.15 | 0.50 |
 | Largest refund first | 0.55 | 0.68 |
-| XGBoost model | 0.80 | 0.75 |
+| XGBoost model | 0.90 | 0.75 |
+
+Precision@20 looks at only 20 returns, so it moves by 0.05 whenever one return changes places (it ranged from 0.80 to 0.90 across machines). AUC, which uses every test return, is the steadier measure.
 
 The demo data is synthetic, but built to be honest: some customer messages are vague or ambiguous, and a small share of historical labels are wrong, so neither model can score perfectly. If no trained model is present, or one fails to load, the API falls back to rule-based routing.
 
